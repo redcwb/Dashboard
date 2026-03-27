@@ -10,15 +10,12 @@ const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 // ============================================================
 function parseBody(req) {
   return new Promise((resolve) => {
-    // Vercel já parseou como objeto
     if (req.body && typeof req.body === 'object' && Object.keys(req.body).length > 0) {
       return resolve(req.body);
     }
-    // Vercel parseou como string
     if (typeof req.body === 'string' && req.body.length > 0) {
       try { return resolve(JSON.parse(req.body)); } catch { return resolve({}); }
     }
-    // Leitura manual do stream
     const chunks = [];
     req.on('data', (c) => chunks.push(c));
     req.on('end', () => {
@@ -31,8 +28,7 @@ function parseBody(req) {
 }
 
 // ============================================================
-// Helper: Extrair e validar token JWT do admin logado
-// Retorna { uid, email } ou envia erro e retorna null
+// Helper: Autenticar admin
 // ============================================================
 async function authenticateAdmin(req, res) {
   const authHeader = req.headers['authorization'] || '';
@@ -43,7 +39,6 @@ async function authenticateAdmin(req, res) {
     return null;
   }
 
-  // Verificar token no Supabase Auth
   const userRes = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
     headers: {
       'Authorization': `Bearer ${token}`,
@@ -60,7 +55,6 @@ async function authenticateAdmin(req, res) {
   const userData = await userRes.json();
   const uid = userData.id;
 
-  // Verificar role via RPC
   const roleRes = await fetch(`${SUPABASE_URL}/rest/v1/rpc/get_role_bypass`, {
     method: 'POST',
     headers: {
@@ -76,7 +70,6 @@ async function authenticateAdmin(req, res) {
     return null;
   }
 
-  // Normalizar resposta da RPC (pode vir como "admin", ["admin"], etc.)
   const roleText = await roleRes.text();
   let role = roleText;
   try {
@@ -97,22 +90,21 @@ async function authenticateAdmin(req, res) {
 
 // ============================================================
 // POST: Criar novo usuário
-// Body: { email, password, role, nome?, unidades_permitidas? }
 // ============================================================
 async function createUser(req, res) {
   const admin = await authenticateAdmin(req, res);
-  if (!admin) return; // resposta já enviada
+  if (!admin) return;
 
   const body = await parseBody(req);
   const { email, password, role, nome, unidades_permitidas } = body;
 
-  // Validações
   if (!email || !password) {
     return res.status(400).json({ error: 'email e password são obrigatórios' });
   }
 
   const allowedRoles = ['admin', 'gestor', 'viewer'];
   const userRole = allowedRoles.includes(role) ? role : 'viewer';
+  const userName = nome || email.split('@')[0];
 
   // 1. Criar usuário no Supabase Auth
   const createRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/users`, {
@@ -126,7 +118,7 @@ async function createUser(req, res) {
       email,
       password,
       email_confirm: true,
-      user_metadata: { nome: nome || email.split('@')[0], role: userRole },
+      user_metadata: { nome: userName, role: userRole },
     }),
   });
 
@@ -141,7 +133,7 @@ async function createUser(req, res) {
 
   const newUid = createData.id;
 
-  // 2. Inserir na tabela profiles
+  // 2. Inserir na tabela profiles (coluna = user_id)
   const profileRes = await fetch(`${SUPABASE_URL}/rest/v1/profiles`, {
     method: 'POST',
     headers: {
@@ -151,19 +143,19 @@ async function createUser(req, res) {
       'Prefer': 'return=representation',
     },
     body: JSON.stringify({
-      id: newUid,
+      user_id: newUid,
       email,
       role: userRole,
-      nome: nome || email.split('@')[0],
+      nome: userName,
       unidades_permitidas: unidades_permitidas || [],
       ativo: true,
+      criado_por: admin.uid,
     }),
   });
 
   const profileData = await profileRes.json();
 
   if (!profileRes.ok) {
-    // Usuário criado no Auth mas falhou no profile — retorna aviso
     return res.status(207).json({
       warning: 'Usuário criado no Auth, mas falhou ao inserir profile',
       userId: newUid,
@@ -177,20 +169,20 @@ async function createUser(req, res) {
       id: newUid,
       email,
       role: userRole,
-      nome: nome || email.split('@')[0],
+      nome: userName,
     },
   });
 }
 
 // ============================================================
-// GET: Listar usuários (da tabela profiles)
+// GET: Listar usuários
 // ============================================================
 async function listUsers(req, res) {
   const admin = await authenticateAdmin(req, res);
   if (!admin) return;
 
   const profilesRes = await fetch(
-    `${SUPABASE_URL}/rest/v1/profiles?select=id,email,role,nome,ativo,unidades_permitidas,created_at&order=created_at.desc`,
+    `${SUPABASE_URL}/rest/v1/profiles?select=user_id,email,role,nome,ativo,unidades_permitidas,created_at&order=created_at.desc`,
     {
       headers: {
         'apikey': SERVICE_KEY,
@@ -209,8 +201,7 @@ async function listUsers(req, res) {
 }
 
 // ============================================================
-// PATCH: Atualizar role ou dados de um usuário
-// Body: { userId, role?, nome?, ativo?, unidades_permitidas? }
+// PATCH: Atualizar usuário
 // ============================================================
 async function updateUser(req, res) {
   const admin = await authenticateAdmin(req, res);
@@ -223,7 +214,6 @@ async function updateUser(req, res) {
     return res.status(400).json({ error: 'userId é obrigatório' });
   }
 
-  // Montar objeto de update apenas com campos enviados
   const updates = {};
   if (role !== undefined) {
     const allowedRoles = ['admin', 'gestor', 'viewer'];
@@ -235,13 +225,14 @@ async function updateUser(req, res) {
   if (nome !== undefined) updates.nome = nome;
   if (ativo !== undefined) updates.ativo = ativo;
   if (unidades_permitidas !== undefined) updates.unidades_permitidas = unidades_permitidas;
+  updates.updated_at = new Date().toISOString();
 
-  if (Object.keys(updates).length === 0) {
+  if (Object.keys(updates).length <= 1) {
     return res.status(400).json({ error: 'Nenhum campo para atualizar' });
   }
 
   const updateRes = await fetch(
-    `${SUPABASE_URL}/rest/v1/profiles?id=eq.${userId}`,
+    `${SUPABASE_URL}/rest/v1/profiles?user_id=eq.${userId}`,
     {
       method: 'PATCH',
       headers: {
@@ -260,7 +251,6 @@ async function updateUser(req, res) {
     return res.status(updateRes.status).json({ error: 'Erro ao atualizar', detail: updateData });
   }
 
-  // Se atualizou role, sincronizar no user_metadata do Auth
   if (role !== undefined) {
     await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${userId}`, {
       method: 'PUT',
@@ -277,8 +267,7 @@ async function updateUser(req, res) {
 }
 
 // ============================================================
-// DELETE: Desativar usuário (soft delete — marca ativo=false)
-// Query param: ?userId=xxx
+// DELETE: Desativar usuário (soft delete)
 // ============================================================
 async function deleteUser(req, res) {
   const admin = await authenticateAdmin(req, res);
@@ -291,9 +280,8 @@ async function deleteUser(req, res) {
     return res.status(400).json({ error: 'userId é obrigatório (query param)' });
   }
 
-  // Soft delete: marca ativo = false
   const delRes = await fetch(
-    `${SUPABASE_URL}/rest/v1/profiles?id=eq.${userId}`,
+    `${SUPABASE_URL}/rest/v1/profiles?user_id=eq.${userId}`,
     {
       method: 'PATCH',
       headers: {
@@ -302,7 +290,7 @@ async function deleteUser(req, res) {
         'Authorization': `Bearer ${SERVICE_KEY}`,
         'Prefer': 'return=representation',
       },
-      body: JSON.stringify({ ativo: false }),
+      body: JSON.stringify({ ativo: false, updated_at: new Date().toISOString() }),
     }
   );
 
@@ -318,7 +306,6 @@ async function deleteUser(req, res) {
 // Handler principal
 // ============================================================
 export default async function handler(req, res) {
-  // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');

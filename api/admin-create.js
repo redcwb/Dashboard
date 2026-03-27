@@ -34,17 +34,22 @@ export default async function handler(req, res) {
       'apikey': process.env.SUPABASE_ANON_KEY,
       'Authorization': `Bearer ${callerToken}`,
       'Content-Type': 'application/json',
+      'Content-Length': '0',
     },
-    body: '{}',
+    body: JSON.stringify({}),
   });
 
+  const meText = await meRes.text();
+  let role = null;
+  try { role = JSON.parse(meText); } catch(e) { role = meText?.trim().replace(/"/g,''); }
+
   if (!meRes.ok) {
-    return res.status(401).json({ error: 'Token inválido' });
+    console.error('[admin-create] get_my_role falhou:', meRes.status, meText);
+    return res.status(401).json({ error: 'Token inválido', detail: meText });
   }
 
-  const role = await meRes.json();
   if (role !== 'admin') {
-    return res.status(403).json({ error: 'Acesso negado — apenas admins podem criar usuários' });
+    return res.status(403).json({ error: 'Acesso negado — apenas admins podem criar usuários', role });
   }
 
   // Extrair dados do novo usuário

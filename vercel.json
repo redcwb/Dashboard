@@ -1,0 +1,10 @@
+{
+  "version": 2,
+  "buildCommand": "node build.mjs",
+  "outputDirectory": "dist",
+  "rewrites": [
+    { "source": "/api/config",       "destination": "/api/config.js" },
+    { "source": "/api/admin-create", "destination": "/api/admin-create.js" },
+    { "source": "/painel",           "destination": "/admin.html" }
+  ]
+}

@@ -1,7 +1,6 @@
 export default async function handler(req, res) {
-  // DEBUG v9 — remover depois
   if (req.method === 'GET') {
-    return res.status(200).json({ version: 'v9', method: req.method });
+    return res.status(200).json({ version: 'v10' });
   }
 
   if (req.method !== 'POST') {
@@ -13,14 +12,24 @@ export default async function handler(req, res) {
   const anonKey     = process.env.SUPABASE_ANON_KEY;
 
   if (!serviceKey || !supabaseUrl || !anonKey) {
-    return res.status(500).json({ error: 'Vars ausentes', v: 'v9' });
+    return res.status(500).json({ error: 'Vars ausentes' });
   }
 
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Token nao fornecido', v: 'v9' });
+    return res.status(401).json({ error: 'Token nao fornecido' });
   }
   const callerToken = authHeader.replace('Bearer ', '');
+
+  // Parse body manualmente se necessário
+  let body = req.body;
+  if (!body || typeof body === 'string') {
+    try {
+      body = JSON.parse(body || '{}');
+    } catch(e) {
+      body = {};
+    }
+  }
 
   // Identificar usuário pelo token
   let callerId = null;
@@ -30,9 +39,9 @@ export default async function handler(req, res) {
     });
     const userData = await userRes.json();
     callerId = userData?.id;
-    if (!callerId) return res.status(401).json({ error: 'Usuario nao identificado', userData, v: 'v9' });
+    if (!callerId) return res.status(401).json({ error: 'Usuario nao identificado', v: 'v10' });
   } catch(e) {
-    return res.status(500).json({ error: 'Erro auth: ' + e.message, v: 'v9' });
+    return res.status(500).json({ error: 'Erro auth: ' + e.message, v: 'v10' });
   }
 
   // Verificar role via get_role_bypass com SERVICE_ROLE
@@ -50,17 +59,16 @@ export default async function handler(req, res) {
     const rpcText = await rpcRes.text();
     try { role = JSON.parse(rpcText); } catch(e) { role = rpcText.trim().replace(/"/g,''); }
     if (role !== 'admin') {
-      return res.status(403).json({ error: 'Acesso negado', role, callerId, rpcStatus: rpcRes.status, rpcText, v: 'v9' });
+      return res.status(403).json({ error: 'Acesso negado', role, callerId, rpcStatus: rpcRes.status, v: 'v10' });
     }
   } catch(e) {
-    return res.status(500).json({ error: 'Erro rpc: ' + e.message, v: 'v9' });
+    return res.status(500).json({ error: 'Erro rpc: ' + e.message, v: 'v10' });
   }
 
-  const body = req.body || {};
   const { nome, email, senha, novoRole = 'user' } = body;
 
   if (!nome || !email || !senha) {
-    return res.status(400).json({ error: 'nome, email e senha sao obrigatorios', v: 'v9' });
+    return res.status(400).json({ error: 'nome email senha obrigatorios', nome, email, temSenha: !!senha, body: JSON.stringify(body), v: 'v10' });
   }
 
   try {
@@ -76,7 +84,7 @@ export default async function handler(req, res) {
 
     const created = await createRes.json();
     if (!createRes.ok) {
-      return res.status(400).json({ error: created.msg || created.message || 'Erro ao criar usuario', v: 'v9' });
+      return res.status(400).json({ error: created.msg || created.message || 'Erro ao criar usuario', v: 'v10' });
     }
 
     const insRes = await fetch(supabaseUrl + '/rest/v1/profiles', {
@@ -92,13 +100,13 @@ export default async function handler(req, res) {
 
     if (!insRes.ok) {
       const e = await insRes.text();
-      return res.status(207).json({ warning: 'Usuario criado mas perfil falhou', userId: created.id, detail: e, v: 'v9' });
+      return res.status(207).json({ warning: 'Usuario criado mas perfil falhou', userId: created.id, detail: e, v: 'v10' });
     }
 
     const profile = await insRes.json();
-    return res.status(200).json({ ok: true, userId: created.id, profile: Array.isArray(profile) ? profile[0] : profile, v: 'v9' });
+    return res.status(200).json({ ok: true, userId: created.id, profile: Array.isArray(profile) ? profile[0] : profile, v: 'v10' });
 
   } catch(e) {
-    return res.status(500).json({ error: 'Erro interno: ' + e.message, v: 'v9' });
+    return res.status(500).json({ error: 'Erro interno: ' + e.message, v: 'v10' });
   }
 }

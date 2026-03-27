@@ -8,7 +8,7 @@ export default async function handler(req, res) {
   const anonKey     = process.env.SUPABASE_ANON_KEY;
 
   if (!serviceKey || !supabaseUrl || !anonKey) {
-    return res.status(500).json({ error: 'Vars ausentes', hasService: !!serviceKey, hasUrl: !!supabaseUrl, hasAnon: !!anonKey });
+    return res.status(500).json({ error: 'Vars ausentes' });
   }
 
   const authHeader = req.headers.authorization;
@@ -17,26 +17,46 @@ export default async function handler(req, res) {
   }
   const callerToken = authHeader.replace('Bearer ', '');
 
-  // Verificar role via tabela profiles diretamente (mais confiável que RPC)
-  const profileCheck = await fetch(
-    supabaseUrl + '/rest/v1/profiles?select=role&user_id=eq.' + req.body?.callerUserId + '&limit=1',
+  // Verificar usuário logado via token
+  const userRes = await fetch(supabaseUrl + '/auth/v1/user', {
+    headers: {
+      'apikey': anonKey,
+      'Authorization': 'Bearer ' + callerToken,
+    }
+  });
+
+  if (!userRes.ok) {
+    return res.status(401).json({ error: 'Token invalido', status: userRes.status });
+  }
+
+  const userData = await userRes.json();
+  const callerId = userData?.id;
+
+  if (!callerId) {
+    return res.status(401).json({ error: 'Usuario nao identificado' });
+  }
+
+  // Verificar role usando SERVICE_ROLE (bypassa RLS)
+  const profileRes = await fetch(
+    supabaseUrl + '/rest/v1/profiles?select=role&user_id=eq.' + callerId + '&limit=1',
     {
       headers: {
-        'apikey': anonKey,
-        'Authorization': 'Bearer ' + callerToken,
+        'apikey': serviceKey,
+        'Authorization': 'Bearer ' + serviceKey,
       }
     }
   );
 
-  const profileData = await profileCheck.json();
+  const profileData = await profileRes.json();
   const role = Array.isArray(profileData) && profileData.length > 0 ? profileData[0].role : null;
 
-  if (!profileCheck.ok || role !== 'admin') {
-    return res.status(403).json({ error: 'Acesso negado', role, profileStatus: profileCheck.status, profileData });
+  if (role !== 'admin') {
+    return res.status(403).json({ error: 'Acesso negado', role, callerId });
   }
 
+  // Criar usuário
   const body = req.body || {};
-  const { nome, email, senha, novoRole = 'user', callerUserId } = body;
+  const { nome, email, senha, novoRole = 'user' } = body;
 
   if (!nome || !email || !senha) {
     return res.status(400).json({ error: 'nome, email e senha sao obrigatorios' });
@@ -58,7 +78,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: created.msg || created.message || 'Erro ao criar usuario' });
     }
 
-    const profileRes = await fetch(supabaseUrl + '/rest/v1/profiles', {
+    const insRes = await fetch(supabaseUrl + '/rest/v1/profiles', {
       method: 'POST',
       headers: {
         'apikey': serviceKey,
@@ -66,15 +86,15 @@ export default async function handler(req, res) {
         'Content-Type': 'application/json',
         'Prefer': 'return=representation',
       },
-      body: JSON.stringify({ user_id: created.id, nome, email, role: novoRole, ativo: true, criado_por: callerUserId || null }),
+      body: JSON.stringify({ user_id: created.id, nome, email, role: novoRole, ativo: true, criado_por: callerId }),
     });
 
-    if (!profileRes.ok) {
-      const e = await profileRes.text();
+    if (!insRes.ok) {
+      const e = await insRes.text();
       return res.status(207).json({ warning: 'Usuario criado mas perfil falhou', userId: created.id, detail: e });
     }
 
-    const profile = await profileRes.json();
+    const profile = await insRes.json();
     return res.status(200).json({ ok: true, userId: created.id, profile: Array.isArray(profile) ? profile[0] : profile });
 
   } catch(e) {

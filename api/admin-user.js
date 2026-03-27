@@ -1,6 +1,8 @@
+export const config = { api: { bodyParser: true } };
+
 export default async function handler(req, res) {
   if (req.method === 'GET') {
-    return res.status(200).json({ version: 'admin-user-v1' });
+    return res.status(200).json({ version: 'admin-user-v2', file: 'admin-user.js' });
   }
 
   if (req.method !== 'POST') {
@@ -21,14 +23,10 @@ export default async function handler(req, res) {
   }
   const callerToken = authHeader.replace('Bearer ', '');
 
-  // Parse body manualmente se necessário
+  // Parse body
   let body = req.body;
   if (!body || typeof body === 'string') {
-    try {
-      body = JSON.parse(body || '{}');
-    } catch(e) {
-      body = {};
-    }
+    try { body = JSON.parse(body || '{}'); } catch(e) { body = {}; }
   }
 
   // Identificar usuário pelo token
@@ -39,9 +37,9 @@ export default async function handler(req, res) {
     });
     const userData = await userRes.json();
     callerId = userData?.id;
-    if (!callerId) return res.status(401).json({ error: 'Usuario nao identificado', v: 'v10' });
+    if (!callerId) return res.status(401).json({ error: 'Usuario nao identificado', v: 'v2' });
   } catch(e) {
-    return res.status(500).json({ error: 'Erro auth: ' + e.message, v: 'v10' });
+    return res.status(500).json({ error: 'Erro auth: ' + e.message, v: 'v2' });
   }
 
   // Verificar role via get_role_bypass com SERVICE_ROLE
@@ -59,19 +57,20 @@ export default async function handler(req, res) {
     const rpcText = await rpcRes.text();
     try { role = JSON.parse(rpcText); } catch(e) { role = rpcText.trim().replace(/"/g,''); }
     if (role !== 'admin') {
-      return res.status(403).json({ error: 'Acesso negado', role, callerId, rpcStatus: rpcRes.status, v: 'v10' });
+      return res.status(403).json({ error: 'Acesso negado', role, callerId, rpcStatus: rpcRes.status, v: 'v2' });
     }
   } catch(e) {
-    return res.status(500).json({ error: 'Erro rpc: ' + e.message, v: 'v10' });
+    return res.status(500).json({ error: 'Erro rpc: ' + e.message, v: 'v2' });
   }
 
   const { nome, email, senha, novoRole = 'user' } = body;
 
   if (!nome || !email || !senha) {
-    return res.status(400).json({ error: 'nome email senha obrigatorios', nome, email, temSenha: !!senha, body: JSON.stringify(body), v: 'v10' });
+    return res.status(400).json({ error: 'nome email senha obrigatorios', nome, email, temSenha: !!senha, v: 'v2' });
   }
 
   try {
+    // Criar usuário no Auth
     const createRes = await fetch(supabaseUrl + '/auth/v1/admin/users', {
       method: 'POST',
       headers: {
@@ -84,9 +83,10 @@ export default async function handler(req, res) {
 
     const created = await createRes.json();
     if (!createRes.ok) {
-      return res.status(400).json({ error: created.msg || created.message || 'Erro ao criar usuario', v: 'v10' });
+      return res.status(400).json({ error: created.msg || created.message || 'Erro ao criar usuario', v: 'v2' });
     }
 
+    // Criar perfil
     const insRes = await fetch(supabaseUrl + '/rest/v1/profiles', {
       method: 'POST',
       headers: {
@@ -100,13 +100,13 @@ export default async function handler(req, res) {
 
     if (!insRes.ok) {
       const e = await insRes.text();
-      return res.status(207).json({ warning: 'Usuario criado mas perfil falhou', userId: created.id, detail: e, v: 'v10' });
+      return res.status(207).json({ warning: 'Usuario criado mas perfil falhou', userId: created.id, detail: e, v: 'v2' });
     }
 
     const profile = await insRes.json();
-    return res.status(200).json({ ok: true, userId: created.id, profile: Array.isArray(profile) ? profile[0] : profile, v: 'v10' });
+    return res.status(200).json({ ok: true, userId: created.id, profile: Array.isArray(profile) ? profile[0] : profile, v: 'v2' });
 
   } catch(e) {
-    return res.status(500).json({ error: 'Erro interno: ' + e.message, v: 'v10' });
+    return res.status(500).json({ error: 'Erro interno: ' + e.message, v: 'v2' });
   }
 }

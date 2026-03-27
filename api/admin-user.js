@@ -1,119 +1,154 @@
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+function parseBody(req) {
+  return new Promise((resolve) => {
+    if (req.body && typeof req.body === 'object' && Object.keys(req.body).length > 0) {
+      return resolve(req.body);
+    }
+    if (typeof req.body === 'string' && req.body.length > 0) {
+      try { return resolve(JSON.parse(req.body)); } catch { return resolve({}); }
+    }
+    const chunks = [];
+    req.on('data', c => chunks.push(c));
+    req.on('end', () => {
+      const raw = Buffer.concat(chunks).toString('utf-8');
+      if (!raw) return resolve({});
+      try { resolve(JSON.parse(raw)); } catch { resolve({}); }
+    });
+    req.on('error', () => resolve({}));
+  });
+}
+
 export default async function handler(req, res) {
+  // CORS
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (req.method === 'OPTIONS') return res.status(200).end();
+
   if (req.method === 'GET') {
-    return res.status(200).json({ version: 'v5', file: 'admin-user.js' });
+    return res.status(200).json({ version: 'v6-debug', file: 'admin-user.js' });
   }
 
   if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
+    return res.status(405).json({ error: 'Method not allowed', v: 'v6-debug' });
   }
 
-  const serviceKey  = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  const supabaseUrl = process.env.SUPABASE_URL;
-  const anonKey     = process.env.SUPABASE_ANON_KEY;
+  const debug = { steps: [], v: 'v6-debug' };
 
-  if (!serviceKey || !supabaseUrl || !anonKey) {
-    return res.status(500).json({ error: 'Vars ausentes' });
-  }
-
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Token nao fornecido' });
-  }
-  const callerToken = authHeader.replace('Bearer ', '');
-
-  // Ler body da requisição
-  const rawBody = await new Promise((resolve, reject) => {
-    let data = '';
-    req.on('data', chunk => { data += chunk; });
-    req.on('end', () => resolve(data));
-    req.on('error', reject);
-    // Timeout de segurança
-    setTimeout(() => resolve(data), 3000);
-  });
-
-  let body = {};
   try {
-    body = rawBody ? JSON.parse(rawBody) : {};
-  } catch(e) {
-    return res.status(400).json({ error: 'Body JSON invalido', raw: rawBody, v: 'v5' });
-  }
-
-  // Identificar usuário pelo token
-  let callerId = null;
-  try {
-    const userRes = await fetch(supabaseUrl + '/auth/v1/user', {
-      headers: { 'apikey': serviceKey, 'Authorization': 'Bearer ' + callerToken }
+    // === STEP 1: Parse body ===
+    const body = await parseBody(req);
+    debug.steps.push({
+      step: 'parse_body',
+      hasBody: Object.keys(body).length > 0,
+      keys: Object.keys(body),
+      rawBodyType: typeof req.body,
     });
-    const userData = await userRes.json();
-    callerId = userData?.id;
-    if (!callerId) return res.status(401).json({ error: 'Usuario nao identificado', v: 'v5' });
-  } catch(e) {
-    return res.status(500).json({ error: 'Erro auth: ' + e.message, v: 'v5' });
-  }
 
-  // Verificar role
-  let role = null;
-  try {
-    const rpcRes = await fetch(supabaseUrl + '/rest/v1/rpc/get_role_bypass', {
+    // === STEP 2: Extrair token ===
+    const authHeader = req.headers['authorization'] || '';
+    const token = authHeader.replace('Bearer ', '');
+    debug.steps.push({
+      step: 'extract_token',
+      hasAuthHeader: !!authHeader,
+      tokenLength: token.length,
+      tokenPrefix: token.substring(0, 20) + '...',
+    });
+
+    if (!token) {
+      return res.status(401).json({ error: 'No token', debug });
+    }
+
+    // === STEP 3: Verificar usuário via Supabase Auth ===
+    const userRes = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'apikey': SERVICE_KEY,
+      },
+    });
+    const userText = await userRes.text();
+    debug.steps.push({
+      step: 'verify_user',
+      status: userRes.status,
+      responsePreview: userText.substring(0, 300),
+    });
+
+    if (!userRes.ok) {
+      return res.status(401).json({
+        error: 'Token validation failed',
+        supabaseError: userText.substring(0, 200),
+        debug,
+      });
+    }
+
+    const userData = JSON.parse(userText);
+    const uid = userData.id;
+    debug.steps.push({ step: 'user_id', uid });
+
+    // === STEP 4: Verificar role via RPC ===
+    const roleRes = await fetch(`${SUPABASE_URL}/rest/v1/rpc/get_role_bypass`, {
       method: 'POST',
       headers: {
-        'apikey': serviceKey,
-        'Authorization': 'Bearer ' + serviceKey,
         'Content-Type': 'application/json',
+        'apikey': SERVICE_KEY,
+        'Authorization': `Bearer ${SERVICE_KEY}`,
       },
-      body: JSON.stringify({ uid: callerId }),
+      body: JSON.stringify({ uid }),
     });
-    const rpcText = await rpcRes.text();
-    try { role = JSON.parse(rpcText); } catch(e) { role = rpcText.trim().replace(/"/g,''); }
+    const roleText = await roleRes.text();
+    debug.steps.push({
+      step: 'check_role',
+      status: roleRes.status,
+      rawResponse: roleText.substring(0, 300),
+      rawType: typeof roleText,
+    });
+
+    // ATENÇÃO: aqui pode estar o problema!
+    // A RPC pode retornar "admin" (com aspas), admin, ["admin"], etc.
+    let role = roleText;
+    try {
+      const parsed = JSON.parse(roleText);
+      // Se retornou string direta
+      if (typeof parsed === 'string') role = parsed;
+      // Se retornou array
+      else if (Array.isArray(parsed) && parsed.length > 0) role = parsed[0];
+      // Se retornou objeto
+      else if (typeof parsed === 'object' && parsed !== null) role = JSON.stringify(parsed);
+    } catch {
+      role = roleText.replace(/"/g, '').trim();
+    }
+
+    debug.steps.push({
+      step: 'parsed_role',
+      role,
+      isAdmin: role === 'admin',
+    });
+
     if (role !== 'admin') {
-      return res.status(403).json({ error: 'Acesso negado', role, callerId, v: 'v5' });
+      return res.status(403).json({
+        error: 'Not admin',
+        roleReceived: role,
+        debug,
+      });
     }
-  } catch(e) {
-    return res.status(500).json({ error: 'Erro rpc: ' + e.message, v: 'v5' });
-  }
 
-  const { nome, email, senha, novoRole = 'user' } = body;
-
-  if (!nome || !email || !senha) {
-    return res.status(400).json({ error: 'campos obrigatorios ausentes', nome: !!nome, email: !!email, senha: !!senha, v: 'v5' });
-  }
-
-  try {
-    const createRes = await fetch(supabaseUrl + '/auth/v1/admin/users', {
-      method: 'POST',
-      headers: {
-        'apikey': serviceKey,
-        'Authorization': 'Bearer ' + serviceKey,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ email, password: senha, email_confirm: true, user_metadata: { nome } }),
+    // === STEP 5: Se chegou aqui, está autenticado como admin ===
+    // Retorna o debug por enquanto, sem criar usuário
+    return res.status(200).json({
+      success: true,
+      message: 'Auth OK - admin confirmed',
+      bodyReceived: body,
+      debug,
     });
 
-    const created = await createRes.json();
-    if (!createRes.ok) {
-      return res.status(400).json({ error: created.msg || created.message || 'Erro ao criar usuario', v: 'v5' });
-    }
-
-    const insRes = await fetch(supabaseUrl + '/rest/v1/profiles', {
-      method: 'POST',
-      headers: {
-        'apikey': serviceKey,
-        'Authorization': 'Bearer ' + serviceKey,
-        'Content-Type': 'application/json',
-        'Prefer': 'return=representation',
-      },
-      body: JSON.stringify({ user_id: created.id, nome, email, role: novoRole, ativo: true, criado_por: callerId }),
+  } catch (err) {
+    debug.steps.push({
+      step: 'exception',
+      message: err.message,
+      stack: err.stack?.substring(0, 300),
     });
-
-    if (!insRes.ok) {
-      const e = await insRes.text();
-      return res.status(207).json({ warning: 'Usuario criado mas perfil falhou', userId: created.id, detail: e, v: 'v5' });
-    }
-
-    const profile = await insRes.json();
-    return res.status(200).json({ ok: true, userId: created.id, profile: Array.isArray(profile) ? profile[0] : profile, v: 'v5' });
-
-  } catch(e) {
-    return res.status(500).json({ error: 'Erro interno: ' + e.message, v: 'v5' });
+    return res.status(500).json({ error: 'Internal error', debug });
   }
 }

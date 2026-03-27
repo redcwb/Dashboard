@@ -1,9 +1,0 @@
-{
-  "version": 2,
-  "rewrites": [
-    { "source": "/api/config",       "destination": "/api/config.js" },
-    { "source": "/api/admin-create", "destination": "/api/admin-create.js" },
-    { "source": "/admin",            "destination": "/dist/admin.html" },
-    { "source": "/",                 "destination": "/dist/index.html" }
-  ]
-}

@@ -762,8 +762,9 @@ body.dark .cq-card{background:var(--c-card);border-color:var(--c-border-3)}
 .cq-stat-val{font-weight:700;font-size:13px}
 
 /* ═══ AUTH / LOGIN MODAL ═══════════════════════════════════ */
-.auth-overlay{display:none;position:fixed;inset:0;background:rgba(10,22,40,.85);z-index:2000;align-items:center;justify-content:center;backdrop-filter:blur(6px)}
+.auth-overlay{display:flex;position:fixed;inset:0;background:rgba(10,22,40,1);z-index:2000;align-items:center;justify-content:center;backdrop-filter:blur(6px)}
 .auth-overlay.show{display:flex}
+.auth-overlay.hide{display:none}
 .auth-box{background:var(--card);border-radius:16px;padding:32px 28px;width:min(380px,90vw);box-shadow:0 24px 64px rgba(0,0,0,.35);animation:fadeUp .25s ease}
 body.dark .auth-box{background:var(--navy2);border:1px solid rgba(255,255,255,.1)}
 .auth-logo{display:flex;align-items:center;gap:10px;margin-bottom:20px}
@@ -1471,7 +1472,13 @@ let SUPABASE_ANON_KEY = null;
 let supaClient = null;
 let SUPA_AVAILABLE = false;
 let SUPA_USER = null;
+let SUPA_USER_ROLE = null; // 'admin', 'gestor', 'viewer'
+let DATA_OWNER_ID = null;  // ID do admin dono dos dados — leituras usam este ID
 let authMode = 'login'; // 'login' ou 'signup'
+
+// Helper: ID para queries de LEITURA (dados do admin) vs ESCRITA (dados do user logado)
+function getReadUserId() { return DATA_OWNER_ID || SUPA_USER?.id; }
+function canWrite() { return SUPA_USER_ROLE === 'admin' || SUPA_USER_ROLE === 'gestor'; }
 
 async function initSupabaseClient() {
   try {
@@ -1583,12 +1590,13 @@ function toggleAuthMode() {
 }
 
 function showAuthModal() {
-  document.getElementById('auth-overlay').classList.add('show');
+  const el = document.getElementById('auth-overlay');
+  el.classList.remove('hide');
+  el.classList.add('show');
   setTimeout(() => document.getElementById('auth-email').focus(), 200);
 }
 
 function hideAuthModal() {
-  // Só permite fechar se o usuário está logado
   if (!SUPA_USER && SUPA_AVAILABLE) {
     const errEl = document.getElementById('auth-err');
     if (errEl) {
@@ -1598,7 +1606,9 @@ function hideAuthModal() {
     }
     return;
   }
-  document.getElementById('auth-overlay').classList.remove('show');
+  const el = document.getElementById('auth-overlay');
+  el.classList.remove('show');
+  el.classList.add('hide');
 }
 
 function skipAuth() {
@@ -1665,7 +1675,7 @@ async function handleAuth() {
     setSyncStatus('cloud', 'Conectado');
     hideAuthModal();
     _log('[Auth] Logado como', SUPA_USER.email);
-    checkAdminAccess();
+    await checkAdminAccess();
 
     // Tentar carregar dados do Supabase após login
     const loaded = await supaLoadAll();
@@ -1691,20 +1701,56 @@ async function handleAuth() {
   }
 }
 
-/* ── Admin Access Check ──────────────────────────────────────── */
+/* ── Admin Access Check + Data Owner Discovery ──────────────── */
 async function checkAdminAccess() {
   if (!SUPA_USER || !SUPA_AVAILABLE) return;
   try {
+    // 1. Buscar role do usuário logado
     const { data: profile } = await supaClient
       .from('profiles')
       .select('role')
       .eq('user_id', SUPA_USER.id)
       .single();
-    if (profile && profile.role === 'admin') {
-      // Mostrar link no auth modal (caso ainda visível)
+    SUPA_USER_ROLE = profile?.role || 'viewer';
+    _log('[Auth] Role:', SUPA_USER_ROLE);
+
+    // 2. Descobrir quem é o dono dos dados (primeiro admin encontrado)
+    if (SUPA_USER_ROLE === 'admin') {
+      // Admin é dono dos próprios dados
+      DATA_OWNER_ID = SUPA_USER.id;
+    } else {
+      // Viewer/gestor: buscar o admin que tem dados
+      const { data: admins } = await supaClient
+        .from('profiles')
+        .select('user_id')
+        .eq('role', 'admin')
+        .eq('ativo', true)
+        .limit(1);
+      if (admins && admins.length > 0) {
+        DATA_OWNER_ID = admins[0].user_id;
+        _log('[Auth] Data owner (admin):', DATA_OWNER_ID);
+      } else {
+        // Fallback: tentar encontrar qualquer user com dados
+        const { data: anyData } = await supaClient
+          .from('meses_carga')
+          .select('user_id')
+          .limit(1);
+        DATA_OWNER_ID = anyData?.[0]?.user_id || SUPA_USER.id;
+      }
+    }
+
+    // 3. Bloquear upload para viewers
+    if (SUPA_USER_ROLE === 'viewer') {
+      const fileInput = document.getElementById('file-input');
+      if (fileInput) fileInput.disabled = true;
+      const uploadBtn = document.querySelector('.upload-btn') || document.getElementById('btn-upload');
+      if (uploadBtn) { uploadBtn.disabled = true; uploadBtn.title = 'Apenas admins e gestores podem enviar dados.'; }
+    }
+
+    // 4. Mostrar painel admin se for admin
+    if (SUPA_USER_ROLE === 'admin') {
       const link = document.getElementById('admin-panel-link');
       if (link) link.style.display = 'block';
-      // Adicionar botão no header
       const hdr = document.querySelector('.toolbar-r') || document.querySelector('.hdr-r');
       if (hdr && !document.getElementById('btn-admin-panel')) {
         const btn = document.createElement('button');
@@ -1719,6 +1765,7 @@ async function checkAdminAccess() {
     }
   } catch(e) {
     _warn('[Admin] Erro ao verificar role:', e.message);
+    DATA_OWNER_ID = SUPA_USER.id; // fallback
   }
 }
 
@@ -1880,7 +1927,7 @@ async function supaLoadAll() {
     const { data: meses, error: metaErr } = await supaClient
       .from('meses_carga')
       .select('*')
-      .eq('user_id', SUPA_USER.id)
+      .eq('user_id', getReadUserId())
       .order('mes', { ascending: true });
     if (metaErr) throw metaErr;
     if (!meses || meses.length === 0) {
@@ -1954,7 +2001,7 @@ async function supaLoadAll() {
     });
 
     // Contar total para progresso
-    const {count: totalPeds} = await supaClient.from('pedidos').select('*',{count:'exact',head:true}).eq('user_id',SUPA_USER.id);
+    const {count: totalPeds} = await supaClient.from('pedidos').select('*',{count:'exact',head:true}).eq('user_id',getReadUserId());
     const totalEst = totalPeds || 0;
     let globalLoaded = 0;
 
@@ -1970,7 +2017,7 @@ async function supaLoadAll() {
         for (let attempt = 1; attempt <= 3; attempt++) {
           const { data, error } = await supaClient
             .from('pedidos').select(cols)
-            .eq('user_id', SUPA_USER.id).eq('mes', mk)
+            .eq('user_id', getReadUserId()).eq('mes', mk)
             .range(from, from + PAGE - 1);
           if (!error && data) { page = data; success = true; break; }
           _warn(`[Pull] ${mk} página ${from} falhou (tentativa ${attempt}):`, error?.message);
@@ -2044,7 +2091,7 @@ async function supaLoadIncremental() {
     const { data, error } = await supaClient
       .from('user_sync')
       .select('last_pull')
-      .eq('user_id', SUPA_USER.id)
+      .eq('user_id', getReadUserId())
       .single();
     if (!error && data?.last_pull) lastPull = data.last_pull;
   } catch(e) {}
@@ -2062,7 +2109,7 @@ async function supaLoadIncremental() {
     const { data: meses, error: metaErr } = await supaClient
       .from('meses_carga')
       .select('*')
-      .eq('user_id', SUPA_USER.id)
+      .eq('user_id', getReadUserId())
       .order('mes', { ascending: true });
     if (metaErr) throw metaErr;
     if (!meses || meses.length === 0) return false;
@@ -2106,7 +2153,7 @@ async function supaLoadIncremental() {
       const { data: pedPage, error: pedErr } = await supaClient
         .from('pedidos')
         .select(pedColumns)
-        .eq('user_id', SUPA_USER.id)
+        .eq('user_id', getReadUserId())
         .gt('updated_at', lastPull)
         .range(from, from + PAGE - 1);
       if (pedErr) throw pedErr;
@@ -2271,6 +2318,7 @@ function rebuildAggregatesFromPedidos() {
 /* ── Supabase: Limpar dados do usuário ─────────────────────── */
 async function supaClear() {
   if (!SUPA_AVAILABLE || !SUPA_USER) return;
+  if (!canWrite()) { alert('Apenas admins e gestores podem limpar dados.'); return; }
   try {
     await supaClient.from('pedidos').delete().eq('user_id', SUPA_USER.id);
     await supaClient.from('meses_carga').delete().eq('user_id', SUPA_USER.id);
@@ -2710,7 +2758,7 @@ async function carregarPlanilha(file){
       setUploadStatus('☁️ ' + result.total.toLocaleString('pt-BR') + ' pedidos processados · ' + result.meses.join(', ') + (result.duplicatas ? ' · ' + result.duplicatas + ' duplicatas' : '') + ' · ' + result.tempoSeg + 's', '#166534');
       setSyncStatus('syncing', 'Atualizando dashboard…');
       // Pull dados atualizados do Supabase
-      const { data: meses } = await supaClient.from('meses_carga').select('*').eq('user_id', SUPA_USER.id).order('mes', { ascending: true });
+      const { data: meses } = await supaClient.from('meses_carga').select('*').eq('user_id', getReadUserId()).order('mes', { ascending: true });
       if (meses && meses.length > 0) {
         DB_RAW = {}; AG_RAW = {}; SLA_CACHE = {}; MESES_K = [];
         UF_RAW = []; TR_RAW = [];
@@ -5324,7 +5372,7 @@ async function cmdVerificar(){
     let ok = true;
     for(const mk of MESES_K){
       const localCount = PEDIDOS_RAW.filter(p=>p.mes===mk).length;
-      const {count, error} = await supaClient.from('pedidos').select('*',{count:'exact',head:true}).eq('user_id',SUPA_USER.id).eq('mes',mk);
+      const {count, error} = await supaClient.from('pedidos').select('*',{count:'exact',head:true}).eq('user_id',getReadUserId()).eq('mes',mk);
       if(error){ msg += `${mk}: ❌ Erro ao consultar\n`; ok=false; continue; }
       const remoteCount = count||0;
       const match = localCount === remoteCount;
@@ -6413,7 +6461,7 @@ async function limparDados() {
       if (session?.user) {
         SUPA_USER = session.user;
         setUserUI(SUPA_USER);
-        checkAdminAccess();
+        await checkAdminAccess();
 
         if (hasLocalData) {
           // Cache existe → tentar sync incremental (só novidades)
@@ -6431,7 +6479,7 @@ async function limparDados() {
           setSyncStatus('syncing', 'Baixando…');
           
           // Fase 1: KPIs + agregados → dashboard completo e navegável
-          const { data: meses } = await supaClient.from('meses_carga').select('*').eq('user_id', SUPA_USER.id).order('mes', { ascending: true });
+          const { data: meses } = await supaClient.from('meses_carga').select('*').eq('user_id', getReadUserId()).order('mes', { ascending: true });
           if (meses && meses.length > 0) {
             DB_RAW = {}; AG_RAW = {}; SLA_CACHE = {}; MESES_K = [];
             UF_RAW = []; TR_RAW = [];

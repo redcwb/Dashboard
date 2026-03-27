@@ -8,7 +8,7 @@ export default async function handler(req, res) {
   const anonKey     = process.env.SUPABASE_ANON_KEY;
 
   if (!serviceKey || !supabaseUrl || !anonKey) {
-    return res.status(500).json({ error: 'Configuracao incompleta' });
+    return res.status(500).json({ error: 'Vars ausentes', hasService: !!serviceKey, hasUrl: !!supabaseUrl, hasAnon: !!anonKey });
   }
 
   const authHeader = req.headers.authorization;
@@ -17,24 +17,22 @@ export default async function handler(req, res) {
   }
   const callerToken = authHeader.replace('Bearer ', '');
 
-  try {
-    const meRes = await fetch(supabaseUrl + '/rest/v1/rpc/get_my_role', {
-      method: 'POST',
+  // Verificar role via tabela profiles diretamente (mais confiável que RPC)
+  const profileCheck = await fetch(
+    supabaseUrl + '/rest/v1/profiles?select=role&user_id=eq.' + req.body?.callerUserId + '&limit=1',
+    {
       headers: {
         'apikey': anonKey,
         'Authorization': 'Bearer ' + callerToken,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({}),
-    });
-    const meText = await meRes.text();
-    let role = null;
-    try { role = JSON.parse(meText); } catch(e) { role = meText.trim().replace(/"/g, ''); }
-    if (!meRes.ok || role !== 'admin') {
-      return res.status(403).json({ error: 'Acesso negado', role, status: meRes.status });
+      }
     }
-  } catch(e) {
-    return res.status(500).json({ error: 'Erro ao verificar permissao: ' + e.message });
+  );
+
+  const profileData = await profileCheck.json();
+  const role = Array.isArray(profileData) && profileData.length > 0 ? profileData[0].role : null;
+
+  if (!profileCheck.ok || role !== 'admin') {
+    return res.status(403).json({ error: 'Acesso negado', role, profileStatus: profileCheck.status, profileData });
   }
 
   const body = req.body || {};

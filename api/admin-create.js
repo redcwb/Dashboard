@@ -17,44 +17,37 @@ export default async function handler(req, res) {
   }
   const callerToken = authHeader.replace('Bearer ', '');
 
-  // Verificar usuário logado via token
+  // Identificar usuário pelo token
   const userRes = await fetch(supabaseUrl + '/auth/v1/user', {
-    headers: {
-      'apikey': anonKey,
-      'Authorization': 'Bearer ' + callerToken,
-    }
+    headers: { 'apikey': anonKey, 'Authorization': 'Bearer ' + callerToken }
   });
 
   if (!userRes.ok) {
-    return res.status(401).json({ error: 'Token invalido', status: userRes.status });
+    return res.status(401).json({ error: 'Token invalido' });
   }
-
   const userData = await userRes.json();
   const callerId = userData?.id;
+  if (!callerId) return res.status(401).json({ error: 'Usuario nao identificado' });
 
-  if (!callerId) {
-    return res.status(401).json({ error: 'Usuario nao identificado' });
-  }
+  // Verificar role via RPC com SERVICE_ROLE (bypassa RLS completamente)
+  const rpcRes = await fetch(supabaseUrl + '/rest/v1/rpc/get_role_bypass', {
+    method: 'POST',
+    headers: {
+      'apikey': serviceKey,
+      'Authorization': 'Bearer ' + serviceKey,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ uid: callerId }),
+  });
 
-  // Verificar role usando SERVICE_ROLE (bypassa RLS)
-  const profileRes = await fetch(
-    supabaseUrl + '/rest/v1/profiles?select=role&user_id=eq.' + callerId + '&limit=1',
-    {
-      headers: {
-        'apikey': serviceKey,
-        'Authorization': 'Bearer ' + serviceKey,
-      }
-    }
-  );
-
-  const profileData = await profileRes.json();
-  const role = Array.isArray(profileData) && profileData.length > 0 ? profileData[0].role : null;
+  const rpcText = await rpcRes.text();
+  let role = null;
+  try { role = JSON.parse(rpcText); } catch(e) { role = rpcText.trim().replace(/"/g,''); }
 
   if (role !== 'admin') {
-    return res.status(403).json({ error: 'Acesso negado', role, callerId });
+    return res.status(403).json({ error: 'Acesso negado', role, callerId, rpcStatus: rpcRes.status, rpcText });
   }
 
-  // Criar usuário
   const body = req.body || {};
   const { nome, email, senha, novoRole = 'user' } = body;
 

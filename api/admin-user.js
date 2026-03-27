@@ -1,6 +1,6 @@
 export default async function handler(req, res) {
   if (req.method === 'GET') {
-    return res.status(200).json({ version: 'v4', file: 'admin-user.js' });
+    return res.status(200).json({ version: 'v5', file: 'admin-user.js' });
   }
 
   if (req.method !== 'POST') {
@@ -35,20 +35,20 @@ export default async function handler(req, res) {
   try {
     body = rawBody ? JSON.parse(rawBody) : {};
   } catch(e) {
-    return res.status(400).json({ error: 'Body JSON invalido', raw: rawBody, v: 'v4' });
+    return res.status(400).json({ error: 'Body JSON invalido', raw: rawBody, v: 'v5' });
   }
 
   // Identificar usuário pelo token
   let callerId = null;
   try {
     const userRes = await fetch(supabaseUrl + '/auth/v1/user', {
-      headers: { 'apikey': anonKey, 'Authorization': 'Bearer ' + callerToken }
+      headers: { 'apikey': serviceKey, 'Authorization': 'Bearer ' + callerToken }
     });
     const userData = await userRes.json();
     callerId = userData?.id;
-    if (!callerId) return res.status(401).json({ error: 'Usuario nao identificado', v: 'v4' });
+    if (!callerId) return res.status(401).json({ error: 'Usuario nao identificado', v: 'v5' });
   } catch(e) {
-    return res.status(500).json({ error: 'Erro auth: ' + e.message, v: 'v4' });
+    return res.status(500).json({ error: 'Erro auth: ' + e.message, v: 'v5' });
   }
 
   // Verificar role
@@ -66,16 +66,16 @@ export default async function handler(req, res) {
     const rpcText = await rpcRes.text();
     try { role = JSON.parse(rpcText); } catch(e) { role = rpcText.trim().replace(/"/g,''); }
     if (role !== 'admin') {
-      return res.status(403).json({ error: 'Acesso negado', role, callerId, v: 'v4' });
+      return res.status(403).json({ error: 'Acesso negado', role, callerId, v: 'v5' });
     }
   } catch(e) {
-    return res.status(500).json({ error: 'Erro rpc: ' + e.message, v: 'v4' });
+    return res.status(500).json({ error: 'Erro rpc: ' + e.message, v: 'v5' });
   }
 
   const { nome, email, senha, novoRole = 'user' } = body;
 
   if (!nome || !email || !senha) {
-    return res.status(400).json({ error: 'campos obrigatorios ausentes', nome: !!nome, email: !!email, senha: !!senha, v: 'v4' });
+    return res.status(400).json({ error: 'campos obrigatorios ausentes', nome: !!nome, email: !!email, senha: !!senha, v: 'v5' });
   }
 
   try {
@@ -91,7 +91,7 @@ export default async function handler(req, res) {
 
     const created = await createRes.json();
     if (!createRes.ok) {
-      return res.status(400).json({ error: created.msg || created.message || 'Erro ao criar usuario', v: 'v4' });
+      return res.status(400).json({ error: created.msg || created.message || 'Erro ao criar usuario', v: 'v5' });
     }
 
     const insRes = await fetch(supabaseUrl + '/rest/v1/profiles', {
@@ -107,13 +107,13 @@ export default async function handler(req, res) {
 
     if (!insRes.ok) {
       const e = await insRes.text();
-      return res.status(207).json({ warning: 'Usuario criado mas perfil falhou', userId: created.id, detail: e, v: 'v4' });
+      return res.status(207).json({ warning: 'Usuario criado mas perfil falhou', userId: created.id, detail: e, v: 'v5' });
     }
 
     const profile = await insRes.json();
-    return res.status(200).json({ ok: true, userId: created.id, profile: Array.isArray(profile) ? profile[0] : profile, v: 'v4' });
+    return res.status(200).json({ ok: true, userId: created.id, profile: Array.isArray(profile) ? profile[0] : profile, v: 'v5' });
 
   } catch(e) {
-    return res.status(500).json({ error: 'Erro interno: ' + e.message, v: 'v4' });
+    return res.status(500).json({ error: 'Erro interno: ' + e.message, v: 'v5' });
   }
 }

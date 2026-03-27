@@ -1,0 +1,10 @@
+{
+  "version": 2,
+  "rewrites": [
+    { "source": "/api/config",       "destination": "/api/config.js" },
+    { "source": "/api/admin-create", "destination": "/api/admin-create.js" },
+    { "source": "/painel",           "destination": "/dist/admin.html" },
+    { "source": "/painel.html",      "destination": "/dist/admin.html" },
+    { "source": "/((?!dist/).*)",    "destination": "/dist/index.html" }
+  ]
+}

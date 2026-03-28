@@ -9,6 +9,10 @@
     {
       "source": "/api/config",
       "destination": "/api/config.js"
+    },
+    {
+      "source": "/api/admin-create",
+      "destination": "/api/admin-user.js"
     }
   ],
   "headers": [

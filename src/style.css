@@ -777,4 +777,3 @@ body.dark .auth-field input{background:var(--navy3);border-color:rgba(255,255,25
 .sync-chip.error .sync-dot{background:#ef4444}
 .user-chip{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);border-radius:20px;font-size:10px;color:#93c5fd;font-family:var(--fm);cursor:pointer;transition:all .15s}
 .user-chip:hover{background:rgba(255,255,255,.14)}
-

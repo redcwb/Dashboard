@@ -9,7 +9,7 @@ const src = readFileSync('src/index.html', 'utf8');
 let out = src;
 const scripts = [];
 out = out.replace(/<script>([\s\S]*?)<\/script>/g, (match, code) => {
-  if (code.trim().length < 50) return match; // skip tiny scripts
+  if (code.trim().length < 100) return match; // skip tiny scripts
   scripts.push(code);
   return `<script>/*PLACEHOLDER_${scripts.length - 1}*/</script>`;
 });
@@ -27,13 +27,9 @@ scripts.forEach((code, i) => {
   }
 });
 
-// Minificar CSS inline (se houver)
-out = out.replace(/<style>([\s\S]*?)<\/style>/g, (match, css) => {
-  return '<style>' + css.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\s+/g, ' ').replace(/\s*([{}:;,])\s*/g, '$1') + '</style>';
-});
-
-// Remover espaços entre tags HTML
-out = out.replace(/>\s+</g, '><');
+// NÃO minificar HTML — preserva <label>, <input> e demais estruturas
+// Apenas remover comentários HTML (exceto condicionais IE)
+out = out.replace(/<!--(?!\[)[\s\S]*?-->/g, '');
 
 mkdirSync('dist', { recursive: true });
 writeFileSync('dist/index.html', out);

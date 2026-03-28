@@ -1,61 +1,30 @@
 import { readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync, readdirSync } from 'fs';
-import { execSync } from 'child_process';
-import { join, dirname } from 'path';
+import { join } from 'path';
 
-// ── Minificar src/index.html → dist/index.html ──
-const src = readFileSync('src/index.html', 'utf8');
-
-// Extrair <script> blocks, minificar com esbuild, reinserir
-let out = src;
-const scripts = [];
-out = out.replace(/<script>([\s\S]*?)<\/script>/g, (match, code) => {
-  if (code.trim().length < 100) return match; // skip tiny scripts
-  scripts.push(code);
-  return `<script>/*PLACEHOLDER_${scripts.length - 1}*/</script>`;
-});
-
-// Minificar cada script com esbuild
-scripts.forEach((code, i) => {
-  try {
-    writeFileSync('/tmp/_build_chunk.js', code);
-    execSync('npx esbuild /tmp/_build_chunk.js --minify --outfile=/tmp/_build_chunk.min.js', { stdio: 'pipe' });
-    const minified = readFileSync('/tmp/_build_chunk.min.js', 'utf8');
-    out = out.replace(`/*PLACEHOLDER_${i}*/`, minified);
-  } catch (e) {
-    console.warn(`⚠ Chunk ${i} não minificado:`, e.message);
-    out = out.replace(`/*PLACEHOLDER_${i}*/`, code);
-  }
-});
-
-// NÃO minificar HTML — preserva <label>, <input> e demais estruturas
-// Apenas remover comentários HTML (exceto condicionais IE)
-out = out.replace(/<!--(?!\[)[\s\S]*?-->/g, '');
-
+// ── Copiar src/index.html → dist/index.html (sem minificação) ──
 mkdirSync('dist', { recursive: true });
-writeFileSync('dist/index.html', out);
-console.log(`✅ dist/index.html: ${(out.length / 1024).toFixed(0)}KB (de ${(src.length / 1024).toFixed(0)}KB — ${Math.round((1 - out.length / src.length) * 100)}% menor)`);
+copyFileSync('src/index.html', 'dist/index.html');
+console.log('✅ dist/index.html copiado');
 
-// ── Copiar arquivos estáticos para dist/ ──
-function copyIfExists(srcPath, destPath) {
-  if (existsSync(srcPath)) {
-    mkdirSync(dirname(destPath), { recursive: true });
-    copyFileSync(srcPath, destPath);
-    console.log(`📄 ${srcPath} → ${destPath}`);
-  }
+// ── Copiar CSS ──
+if (existsSync('src/style.css')) {
+  copyFileSync('src/style.css', 'dist/style.css');
+  console.log('📄 dist/style.css copiado');
 }
 
-// CSS externo
-copyIfExists('src/style.css', 'dist/style.css');
+// ── Copiar topojson ──
+if (existsSync('src/data/brasil-topo.json')) {
+  mkdirSync('dist/data', { recursive: true });
+  copyFileSync('src/data/brasil-topo.json', 'dist/data/brasil-topo.json');
+  console.log('📄 dist/data/brasil-topo.json copiado');
+}
 
-// Topojson
-copyIfExists('src/data/brasil-topo.json', 'dist/data/brasil-topo.json');
-
-// Módulos ES (para migração futura)
+// ── Copiar módulos ──
 if (existsSync('src/modules')) {
   mkdirSync('dist/modules', { recursive: true });
   readdirSync('src/modules').filter(f => f.endsWith('.js')).forEach(f => {
     copyFileSync(join('src/modules', f), join('dist/modules', f));
-    console.log(`📄 src/modules/${f} → dist/modules/${f}`);
+    console.log('📄 dist/modules/' + f + ' copiado');
   });
 }
 
